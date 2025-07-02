@@ -1,0 +1,217 @@
+# dbt test入門筆記
+
+## 🎯 學習目標
+理解 dbt 測試的基本概念、實作方式，以及如何在數據管道中應用測試來確保資料品質。
+
+## 📋 大綱
+1. 為什麼需要 dbt 測試？
+2. dbt 測試的基本概念
+3. 內建測試類型介紹
+4. 實作步驟詳解
+5. 進階功能：dbt build
+6. 故障排除與最佳實踐
+
+---
+
+## 1. 為什麼需要 dbt 測試？
+
+### 📊 SQL 開發的常見問題
+- **語法錯誤**：join 錯欄位導致資料膨脹
+- **邏輯錯誤**：數字計算錯誤
+- **人工檢查負擔**：需要花費大量時間驗證資料正確性
+
+### 💡 dbt 測試的價值
+- **自動化驗證**：減少人工檢查時間
+- **資料品質保證**：確保下游資料的正確性
+- **排程保護**：測試失敗時阻止錯誤資料傳播
+
+> **重點理解**：dbt 測試不只是驗證工具，更是資料管道的守門員
+
+---
+
+## 2. dbt 測試的基本概念
+
+### 🔍 什麼是 Generic Tests？
+- **定義**：dbt 內建的標準化測試類型
+- **配置方式**：透過 YAML 檔案定義
+- **執行時機**：與資料模型一起運行
+
+### 📁 檔案結構
+```
+models/
+├── schema.yml    # 測試定義檔案
+├── stg_customers.sql
+└── stg_orders.sql
+```
+
+---
+
+## 3. 內建測試類型介紹
+
+### 🛠️ 四種核心測試類型
+
+| 測試類型 | 功能說明 | 使用場景 |
+|---------|---------|----------|
+| `unique` | 檢查欄位值是否唯一 | 主鍵、ID 欄位 |
+| `not_null` | 檢查欄位是否有空值 | 必填欄位驗證 |
+| `accepted_values` | 檢查欄位值是否在允許範圍內 | 狀態、類別欄位 |
+| `relationships` | 檢查外鍵關聯是否存在 | 表格間關聯驗證 |
+
+### 📝 實際應用範例
+
+#### 基本測試
+```yaml
+# 檢查客戶 ID 的唯一性和非空值
+- name: customer_id
+  tests:
+    - unique
+    - not_null
+```
+
+#### 數值範圍測試
+```yaml
+# 檢查訂單狀態是否在允許值內
+- name: status
+  tests:
+    - accepted_values:
+        values: ['placed', 'shipped', 'completed', 'return_pending', 'returned']
+```
+
+#### 關聯性測試
+```yaml
+# 檢查外鍵關聯
+- name: customer_id
+  tests:
+    - relationships:
+        to: ref('stg_customers')
+        field: customer_id
+```
+
+---
+
+## 4. 實作步驟詳解
+
+### 📋 Step 1: 建立測試定義檔案
+在 `models` 資料夾下建立 `schema.yml`
+
+### 📝 Step 2: 撰寫測試配置
+```yaml
+version: 2
+
+models:
+  - name: stg_customers
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_orders
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['placed', 'shipped', 'completed', 'return_pending', 'returned']
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+```
+
+### ⚡ Step 3: 執行測試
+```bash
+dbt test
+```
+
+### 📊 結果解讀
+- ✅ **綠色勾號**：測試通過
+- ❌ **紅色叉號**：測試失敗，需要檢查資料或調整測試條件
+
+---
+
+## 5. 進階功能：dbt build
+
+### 🚀 什麼是 dbt build？
+`dbt build` 是一個綜合指令，包含：
+- **run models**：執行資料模型
+- **test tests**：運行測試
+- **snapshot snapshots**：建立快照
+- **seed seeds**：載入種子資料
+
+### 💪 核心優勢
+- **順序執行**：先測試，後更新
+- **錯誤阻斷**：測試失敗時停止下游更新
+- **資料保護**：防止錯誤資料污染下游
+
+### 🔄 執行流程
+```
+測試上游資料 → 更新當前模型 → 測試當前模型 → 更新下游模型
+```
+
+### 💡 實際應用
+```bash
+dbt build
+```
+如果 `stg_orders` 的測試失敗，下游的 `customers` 模型就不會更新。
+
+---
+
+## 6. 故障排除與最佳實踐
+
+### 🔧 常見問題解決
+
+#### 測試失敗的處理步驟
+1. **檢查測試邏輯**：確認測試條件是否合理
+2. **查看失敗資料**：分析哪些資料不符合條件
+3. **修正資料或測試**：根據業務邏輯調整
+
+#### 測試失敗範例解析
+```yaml
+# 故意製造失敗：移除某些狀態值
+- accepted_values:
+    values: ['placed', 'shipped', 'completed']  # 缺少 'return_pending', 'returned'
+```
+
+### 📈 最佳實踐建議
+
+#### 1. 測試設計原則
+- **關鍵欄位優先**：主鍵、外鍵、重要業務欄位
+- **合理性檢查**：數值範圍、日期邏輯
+- **一致性驗證**：跨表資料對應關係
+
+#### 2. 測試維護
+- **定期檢視**：隨業務變化更新測試條件
+- **文件記錄**：說明測試目的和預期結果
+- **團隊溝通**：確保測試邏輯符合業務需求
+
+#### 3. 效能考量
+- **適度測試**：避免過度測試影響執行效能
+- **分層測試**：在不同層級設置不同強度的測試
+
+---
+
+## 📚 延伸學習
+
+### 🔗 相關指令回顧
+- `dbt test`：執行所有測試
+- `dbt build`：執行模型和測試的完整流程
+- `dbt run`：僅執行資料模型
+
+
+---
+
+## 📋 重點回顧
+
+✅ **核心概念**：dbt test 是資料品質的守護者  
+✅ **四種測試**：unique, not_null, accepted_values, relationships  
+✅ **實作方式**：透過 schema.yml 定義，用 dbt test 執行  
+✅ **進階應用**：使用 dbt build 整合測試與模型更新  
+✅ **故障處理**：分析失敗原因，調整測試或修正資料  
+
+**記住**：好的測試不只是檢查資料，更是建立可信賴的資料管道的基礎！
