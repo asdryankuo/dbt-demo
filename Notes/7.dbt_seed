@@ -1,0 +1,345 @@
+# dbt Seeds 入門筆記
+
+## 🎯 學習目標
+掌握 dbt Seeds 功能，學會使用 CSV 檔案管理對照表和參考資料，擺脫傳統手動維護資料表的困擾。
+
+## 📋 大綱
+1. 什麼是 dbt Seeds？
+2. 傳統方式 vs dbt Seeds
+3. 實際案例分析
+4. Seeds 實作步驟
+5. 進階應用與最佳實踐
+6. 常見問題與注意事項
+
+---
+
+## 1. 什麼是 dbt Seeds？
+
+### 🔍 定義與用途
+dbt Seeds 是一個讓你將**手動維護的對照表（mapping table）**納入 dbt 專案管理的功能。
+
+#### 📊 典型使用場景
+- **狀態對照表**：訂單狀態與業務分類的映射
+- **分類定義**：產品類別、客戶分群等靜態分類
+- **參數設定**：業務規則、閾值設定等小型參考資料
+- **測試資料**：開發環境的模擬資料
+
+### 💡 核心價值
+Seeds 將靜態的參考資料從「資料庫維護工作」轉變為「程式碼管理」，帶來版本控制、自動化部署等好處。
+
+---
+
+## 2. 傳統方式 vs dbt Seeds
+
+### 😰 傳統方式的痛點
+
+#### 🛠️ 手動資料庫操作
+```sql
+-- 建立表格
+CREATE TABLE order_status_mapping (
+    status VARCHAR(50),
+    is_valid CHAR(1)
+);
+
+-- 手動插入資料
+INSERT INTO order_status_mapping VALUES 
+('placed', 'Y'),
+('shipped', 'Y'),
+('completed', 'Y'),
+('returned', 'N'),
+('return_pending', 'N');
+
+-- 後續維護更新
+UPDATE order_status_mapping 
+SET is_valid = 'N' 
+WHERE status = 'cancelled';
+```
+
+#### ❌ 傳統方式的問題
+| 問題 | 影響 | 後果 |
+|------|------|------|
+| **無版本控制** | 難以追蹤變更歷史 | 無法回溯問題發生時間點 |
+| **手動操作** | 容易出現人為錯誤 | 資料不一致、系統錯誤 |
+| **環境不同步** | 開發、測試、正式環境差異 | 部署時出現未預期問題 |
+| **維護負擔** | 需要專門時間處理 | 增加營運成本 |
+
+### 🚀 dbt Seeds 的優勢
+
+#### ✅ Seeds 帶來的改善
+| 優勢 | 說明 | 價值 |
+|------|------|------|
+| **版本控制** | CSV 檔案納入 Git 管理 | 完整的變更歷史追蹤 |
+| **自動化部署** | 隨 dbt 流程一起執行 | 減少手動操作錯誤 |
+| **環境一致性** | 同一份程式碼部署到不同環境 | 消除環境差異問題 |
+| **團隊協作** | 透過 Pull Request 審核變更 | 提升資料品質控制 |
+
+---
+
+## 3. 實際案例分析
+
+### 📋 業務需求場景
+假設我們有一個訂單資料表 `stg_orders`，需要根據訂單狀態判斷是否為「有效訂單」。
+
+#### 🏢 業務規則
+- **有效狀態**：`placed`、`shipped`、`completed` → `is_valid = 'Y'`
+- **無效狀態**：`returned`、`return_pending` → `is_valid = 'N'`
+
+### 🔄 解決方案比較
+
+#### 方案一：Case When 語法
+```sql
+select
+    id as order_id,
+    user_id as customer_id,
+    order_date,
+    status,
+    case
+        when status in ('placed', 'shipped', 'completed')
+        then 'Y'
+        when status in ('returned', 'return_pending')
+        then 'N'
+    end as is_valid
+from {{ source('jaffle_shop', 'orders') }}
+```
+
+**適用情境**：狀態值少且穩定
+
+#### 方案二：dbt Seeds + Join
+```sql
+with source as (
+    select
+        id as order_id,
+        user_id as customer_id,
+        order_date,
+        status
+    from {{ source('jaffle_shop', 'orders') }}
+),
+order_status_mapping as (
+    select * from {{ ref('seed_order_statuses') }}
+),
+transformed as (
+    select
+        t0.order_id,
+        t0.customer_id,
+        t0.order_date,
+        t0.status,
+        t1.is_valid
+    from source as t0
+    left join order_status_mapping as t1 
+        on t0.status = t1.status
+)
+select * from transformed
+```
+
+**適用情境**：狀態值多、經常變動、邏輯複雜
+
+### 📊 何時選擇 Seeds？
+
+| 情況 | 建議方案 | 原因 |
+|------|----------|------|
+| 對照值 < 10 個且穩定 | Case When | 簡單直接，維護成本低 |
+| 對照值 > 10 個或經常變動 | dbt Seeds | 易於維護，支援複雜邏輯 |
+| 需要多欄位對照 | dbt Seeds | Case When 會過於複雜 |
+| 跨團隊協作維護 | dbt Seeds | 版本控制和審核機制 |
+
+---
+
+## 4. Seeds 實作步驟
+
+### 📁 Step 1: 建立 CSV 檔案
+在專案根目錄的 `seeds` 資料夾中建立檔案：`seed_order_statuses.csv`
+
+```csv
+status,is_valid
+placed,Y
+shipped,Y
+completed,Y
+returned,N
+return_pending,N
+```
+
+#### 📝 CSV 檔案撰寫要點
+- **第一行必須是欄位名稱**（header）
+- **檔案名稱即為在 dbt 中的表格名稱**
+- **避免使用特殊字元**，建議用底線分隔
+- **資料類型會自動推斷**，如需指定可在 schema.yml 中定義
+
+### ⚡ Step 2: 執行 Seeds 指令
+```bash
+dbt seed
+```
+
+這個指令會：
+1. 讀取 `seeds` 資料夾中的所有 CSV 檔案
+2. 在目標資料庫中建立對應的表格
+3. 將 CSV 資料匯入表格中
+
+### 🔗 Step 3: 在 Model 中引用
+使用 `ref()` 函數引用 seed：
+
+```sql
+select * from {{ ref('seed_order_statuses') }}
+```
+
+### 🔄 Step 4: 更新流程
+當對照表需要更新時：
+1. 修改 CSV 檔案內容
+2. 重新執行 `dbt seed`
+3. 執行相關的 models
+
+---
+
+## 5. 進階應用與最佳實踐
+
+### 🏗️ Seeds 在 dbt 流程中的定位
+
+#### 📊 執行順序
+```mermaid
+graph LR
+    A[dbt seed] --> B[dbt run]
+    B --> C[dbt test]
+```
+
+Seeds 通常在 models 之前執行，因為 models 可能會引用 seeds 的資料。
+
+### ⚙️ 進階配置
+
+#### 📋 在 schema.yml 中定義 Seeds 屬性
+```yaml
+version: 2
+
+seeds:
+  - name: seed_order_statuses
+    description: "訂單狀態對照表，定義各狀態是否為有效訂單"
+    columns:
+      - name: status
+        description: "訂單狀態代碼"
+        tests:
+          - unique
+          - not_null
+      - name: is_valid
+        description: "是否為有效訂單 (Y/N)"
+        tests:
+          - accepted_values:
+              values: ['Y', 'N']
+```
+
+#### 🎯 Seeds 專用測試
+為 seeds 加入測試確保資料品質：
+- **唯一性檢查**：確保對照鍵不重複
+- **完整性檢查**：確保必要欄位不為空
+- **數值範圍檢查**：確保值在預期範圍內
+
+### 📈 團隊協作最佳實踐
+
+#### 1. 命名規範
+```
+seed_[業務領域]_[對照類型].csv
+例如：
+- seed_order_statuses.csv
+- seed_product_categories.csv
+- seed_customer_segments.csv
+```
+
+#### 2. 變更管理流程
+```mermaid
+graph TD
+    A[業務需求變更] --> B[修改 CSV 檔案]
+    B --> C[本地測試]
+    C --> D[提交 Pull Request]
+    D --> E[程式碼審核]
+    E --> F[合併到主分支]
+    F --> G[自動部署]
+```
+
+#### 3. 文件化要求
+- **業務背景**：說明對照表的業務用途
+- **更新頻率**：預期的更新週期
+- **負責人員**：誰有權限修改這些資料
+- **影響範圍**：修改後會影響哪些 models
+
+---
+
+## 6. 常見問題與注意事項
+
+### ❓ 常見問題解答
+
+#### Q1: Seeds 和 Models 有什麼差別？
+**比較表**：
+
+| 特性 | Seeds | Models |
+|------|-------|--------|
+| **資料來源** | CSV 檔案 | SQL 查詢結果 |
+| **資料性質** | 靜態參考資料 | 動態計算結果 |
+| **更新方式** | 手動修改 CSV | 重新執行 SQL |
+| **適用場景** | 對照表、參數設定 | 業務邏輯轉換 |
+
+#### Q2: 什麼時候不應該使用 Seeds？
+**不適用的情況**：
+- 大量資料（建議 < 1000 筆）
+- 經常變動的交易資料
+- 從其他系統同步的資料
+- 包含敏感資訊的資料
+
+#### Q3: 如何處理 Seeds 的資料類型？
+**解決方案**：
+```yaml
+# 在 dbt_project.yml 中指定資料類型
+seeds:
+  your_project:
+    seed_order_statuses:
+      +column_types:
+        status: varchar(50)
+        is_valid: char(1)
+```
+
+### ⚠️ 重要注意事項
+
+#### 🔒 版本控制考量
+- Seeds 的 CSV 檔案會納入 Git，避免包含敏感資料
+- 建議在 `.gitignore` 中排除包含機密資訊的 seeds
+
+#### 📊 效能考量
+- Seeds 適合小型參考資料，大量資料請考慮其他方案
+- 每次執行 `dbt seed` 會完全重建表格
+
+#### 🌍 環境管理
+- 不同環境可能需要不同的對照資料
+- 可透過 dbt profiles 和變數管理環境差異
+
+---
+
+## 📚 延伸學習
+
+### 🔗 相關指令回顧
+```bash
+dbt seed                    # 執行所有 seeds
+dbt seed --select [name]    # 執行特定 seed
+dbt seed --full-refresh     # 強制重建 seeds 表格
+```
+
+### 🎯 下一步學習方向
+1. **dbt Commands**：學習更多 dbt 指令的組合使用
+2. **進階配置**：深入了解 seeds 的客製化設定
+3. **資料治理**：建立 seeds 的管理和審核機制
+
+---
+
+## 📋 重點回顧
+
+### ✅ 核心概念
+- **Seeds 定位**：管理手動維護的小型參考資料
+- **核心價值**：版本控制 + 自動化部署 + 團隊協作
+- **適用場景**：對照表、分類定義、參數設定
+
+### ✅ 實作要點
+- **檔案放置**：seeds 資料夾下的 CSV 檔案
+- **執行方式**：`dbt seed` 指令載入資料
+- **引用方法**：使用 `{{ ref('seed_name') }}` 語法
+
+### ✅ 實務價值
+- **告別手動維護**：不再需要 INSERT/UPDATE/DELETE
+- **提升協作效率**：透過程式碼審核管理資料變更
+- **確保環境一致**：統一的部署流程消除環境差異
+
+**記住**：Seeds 看似簡單，卻是現代化資料管道中不可或缺的一環，讓靜態資料也能享受軟體工程的最佳實踐！
