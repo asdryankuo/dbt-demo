@@ -1,10 +1,10 @@
 -- 原先一開始的樣子：
-select
-    id as order_id,
-    user_id as customer_id,
-    order_date,
-    status
-from {{ source ( 'jaffle_shop', 'orders' ) }}
+-- select
+--     id as order_id,
+--     user_id as customer_id,
+--     order_date,
+--     status
+-- from {{ source ( 'jaffle_shop', 'orders' ) }}
 
 -- 如果後續要新增一個欄位，is_valid (Y/N)
 
